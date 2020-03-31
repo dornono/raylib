@@ -17,8 +17,8 @@ int main(void)
 {
     // Initialization
     //--------------------------------------------------------------------------------------
-    const int screenWidth = 800;
-    const int screenHeight = 450;
+    const int screenWidth = 320;
+    const int screenHeight = 240;
 
     InitWindow(screenWidth, screenHeight, "raylib [text] example - input box");
 
