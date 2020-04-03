@@ -116,7 +116,7 @@
 // NOTE: MSC C++ compiler does not support compound literals (C99 feature)
 // Plain structures in C++ (without constructors) can be initialized from { } initializers.
 #if defined(__cplusplus)
-    #define CLITERAL(type)      type
+    #define CLITERAL(type)      (type)
 #else
     #define CLITERAL(type)      (type)
 #endif
@@ -1404,7 +1404,8 @@ RLAPI Sound LoadSound(const char *fileName);                          // Load so
 RLAPI Sound LoadSoundFromWave(Wave wave);                             // Load sound from wave data
 RLAPI void UpdateSound(Sound sound, const void *data, int samplesCount);// Update sound buffer with new data
 RLAPI void UnloadWave(Wave wave);                                     // Unload wave data
-RLAPI void UnloadSound(Sound sound);                                  // Unload sound
+RLAPI void UnloadSound(Sound sound);
+RLAPI void ReplaceSound(Sound *sound, const void *data, int samplesCount);
 RLAPI void ExportWave(Wave wave, const char *fileName);               // Export wave data to file
 RLAPI void ExportWaveAsCode(Wave wave, const char *fileName);         // Export wave sample data to code (.h)
 
@@ -1419,6 +1420,15 @@ RLAPI int GetSoundsPlaying(void);                                     // Get num
 RLAPI bool IsSoundPlaying(Sound sound);                               // Check if a sound is currently playing
 RLAPI void SetSoundVolume(Sound sound, float volume);                 // Set volume for a sound (1.0 is max level)
 RLAPI void SetSoundPitch(Sound sound, float pitch);                   // Set pitch for a sound (1.0 is base level)
+RLAPI float GetSoundTimeLength(Sound sound);                          // Get music time length (in seconds)
+RLAPI float GetSoundTimePlayed(Sound sound);
+RLAPI float GetSoundStartPos(Sound sound);
+RLAPI void SetSoundPos(Sound sound, float pos);
+RLAPI void SetSoundLoopStart(Sound sound, float pos);
+RLAPI void SetSoundLoopEnd(Sound sound, float pos);
+RLAPI void SoundLoopStartDelta(Sound sound, int delta);
+RLAPI void SoundLoopEndDelta(Sound sound, int delta);
+RLAPI int SoundReadChunk(Sound sound, int numSamples, float* buf);
 RLAPI void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels);  // Convert wave data to desired format
 RLAPI Wave WaveCopy(Wave wave);                                       // Copy a wave to a new wave
 RLAPI void WaveCrop(Wave *wave, int initSample, int finalSample);     // Crop a wave to defined samples range

@@ -279,7 +279,7 @@ struct rAudioBuffer {
 
     bool isSubBufferProcessed[2];   // SubBuffer processed (virtual double buffer)
     unsigned int sizeInFrames;      // Total buffer size in frames
-    unsigned int frameCursorPos;    // Frame cursor position
+    unsigned int frameReadPos;    // Frame cursor position
     unsigned int totalFramesProcessed;  // Total frames processed in this buffer (required for play timing)
 
     unsigned char *data;            // Data buffer, on music stream keeps filling
@@ -352,6 +352,37 @@ void TraceLog(int msgType, const char *text, ...);      // Show trace log messag
 #endif
 
 //----------------------------------------------------------------------------------
+
+// Audio buffer structure
+// NOTE: Slightly different logic is used when feeding data to the
+// playback device depending on whether or not data is streamed
+//struct rAudioBuffer {
+//    ma_pcm_converter dsp;   // PCM data converter
+//
+//    float volume;           // Audio buffer volume
+//    float pitch;            // Audio buffer pitch
+//
+//    bool playing;           // Audio buffer state: AUDIO_PLAYING
+//    bool paused;            // Audio buffer state: AUDIO_PAUSED
+//    bool looping;           // Audio buffer looping, always true for AudioStreams
+//    int usage;              // Audio buffer usage mode: STATIC or STREAM
+//
+//    bool isSubBufferProcessed[2];       // SubBuffer processed (virtual double buffer)
+//    unsigned int frameReadPos;        // Frame cursor position
+//    unsigned int frameWritePos;
+//    unsigned int totalFramesProcessed;  // Total frames processed in this buffer (required for play timming)
+//    unsigned int loopStartPos;
+//    unsigned int loopEndPos;
+//    unsigned char *buffer;              // Data buffer, on music stream keeps filling
+//    unsigned int   bufferSizeInFrames;    // Total buffer size in frames
+//
+//    unsigned char *origBuffer;
+//    unsigned int   origBufferSizeInFrames;
+//
+//    rAudioBuffer *next;     // Next audio buffer on the list
+//    rAudioBuffer *prev;     // Previous audio buffer on the list
+//};
+
 // AudioBuffer management functions declaration
 // NOTE: Those functions are not exposed by raylib... for the moment
 //----------------------------------------------------------------------------------
@@ -367,7 +398,6 @@ void SetAudioBufferVolume(AudioBuffer *buffer, float volume);
 void SetAudioBufferPitch(AudioBuffer *buffer, float pitch);
 void TrackAudioBuffer(AudioBuffer *buffer);
 void UntrackAudioBuffer(AudioBuffer *buffer);
-
 //----------------------------------------------------------------------------------
 // Module Functions Definition - Audio Device initialization and Closing
 //----------------------------------------------------------------------------------
@@ -484,7 +514,16 @@ AudioBuffer *LoadAudioBuffer(ma_format format, ma_uint32 channels, ma_uint32 sam
         return NULL;
     }
 
-    audioBuffer->data = RL_CALLOC(sizeInFrames*channels*ma_get_bytes_per_sample(format), 1);
+    audioBuffer->buffer = RL_CALLOC(sizeInFrames*channels*ma_get_bytes_per_sample(format), 1);
+
+    audioBuffer->origBuffer = audioBuffer->buffer;
+    audioBuffer->origBufferSizeInFrames = bufferSizeInFrames;
+
+    TRACELOG(LOG_INFO,
+             "InitAudioBuffer() : allocate %u bytes for audio buffer",
+             bufferSizeInFrames *
+                     channels *
+                     ma_get_bytes_per_sample(format));
 
     // Audio data runs through a format converter
     ma_data_converter_config converterConfig = ma_data_converter_config_init(format, AUDIO_DEVICE_FORMAT, channels, AUDIO_DEVICE_CHANNELS, sampleRate, AUDIO_DEVICE_SAMPLE_RATE);
@@ -506,8 +545,10 @@ AudioBuffer *LoadAudioBuffer(ma_format format, ma_uint32 channels, ma_uint32 sam
     audioBuffer->paused = false;
     audioBuffer->looping = false;
     audioBuffer->usage = usage;
-    audioBuffer->frameCursorPos = 0;
-    audioBuffer->sizeInFrames = sizeInFrames;
+    audioBuffer->frameReadPos = 0;
+    audioBuffer->bufferSizeInFrames = bufferSizeInFrames;
+    audioBuffer->loopStartPos = 0;
+    audioBuffer->loopEndPos = audioBuffer->bufferSizeInFrames;
 
     // Buffers should be marked as processed by default so that a call to
     // UpdateAudioStream() immediately after initialization works correctly
@@ -551,7 +592,7 @@ void PlayAudioBuffer(AudioBuffer *buffer)
     {
         buffer->playing = true;
         buffer->paused = false;
-        buffer->frameCursorPos = 0;
+        buffer->frameReadPos = 0;
     }
 }
 
@@ -564,7 +605,7 @@ void StopAudioBuffer(AudioBuffer *buffer)
         {
             buffer->playing = false;
             buffer->paused = false;
-            buffer->frameCursorPos = 0;
+            buffer->frameReadPos = 0;
             buffer->totalFramesProcessed = 0;
             buffer->isSubBufferProcessed[0] = true;
             buffer->isSubBufferProcessed[1] = true;
@@ -737,6 +778,21 @@ void UnloadSound(Sound sound)
     TRACELOG(LOG_INFO, "WAVE: Unloaded sound data from RAM");
 }
 
+void ReplaceSound(Sound *sound, const void *data, int samplesCount)
+{
+    if (sound->stream.buffer->buffer &&
+        (sound->stream.buffer->buffer !=
+                sound->stream.buffer->origBuffer))
+    {
+        RL_FREE(sound->stream.buffer->buffer);
+    }
+
+    sound->sampleCount = samplesCount;
+    sound->stream.buffer->buffer = data;
+    sound->stream.buffer->bufferSizeInFrames =
+            samplesCount / sound->stream.channels;
+}
+
 // Update sound buffer with new data
 void UpdateSound(Sound sound, const void *data, int samplesCount)
 {
@@ -745,7 +801,10 @@ void UpdateSound(Sound sound, const void *data, int samplesCount)
         StopAudioBuffer(sound.stream.buffer);
 
         // TODO: May want to lock/unlock this since this data buffer is read at mixing time
-        memcpy(sound.stream.buffer->data, data, samplesCount*ma_get_bytes_per_frame(sound.stream.buffer->converter.config.formatIn, sound.stream.buffer->converter.config.channelsIn));
+        memcpy(sound.stream.buffer->data,
+               data,
+               samplesCount*ma_get_bytes_per_frame(sound.stream.buffer->converter.config.formatIn,
+                                                   sound.stream.buffer->converter.config.channelsIn));
     }
 }
 
@@ -935,6 +994,161 @@ void SetSoundVolume(Sound sound, float volume)
 void SetSoundPitch(Sound sound, float pitch)
 {
     SetAudioBufferPitch(sound.stream.buffer, pitch);
+}
+
+float GetSoundTimeLength(Sound sound)
+{
+    float totalSeconds = 0.0f;
+
+    if (sound.stream.buffer->looping)
+    {
+        totalSeconds =
+                (float)sound.stream.buffer->loopEndPos/
+                sound.stream.sampleRate;
+    }
+    else
+    {
+        totalSeconds =
+                (float)sound.sampleCount/
+                (sound.stream.sampleRate*
+                        sound.stream.channels);
+    }
+
+    return totalSeconds;
+}
+
+// Get current music time played (in seconds)
+float GetSoundTimePlayed(Sound sound)
+{
+    float secondsPlayed = 0.0f;
+
+    //ma_uint32 frameSizeInBytes = ma_get_bytes_per_sample(music.stream.buffer->dsp.formatConverterIn.config.formatIn)*music.stream.buffer->dsp.formatConverterIn.config.channels;
+    unsigned int samplesPlayed =
+            sound.stream.buffer->frameReadPos *
+            sound.stream.channels;
+
+    secondsPlayed =
+            (float)samplesPlayed /
+            (sound.stream.sampleRate *
+             sound.stream.channels);
+
+    return secondsPlayed;
+}
+
+float GetSoundStartPos(Sound sound)
+{
+    return (sound.stream.buffer->loopStartPos / sound.stream.sampleRate);
+}
+
+void SetSoundPos(Sound sound, float pos)
+{
+    sound.stream.buffer->frameReadPos =
+            pos * sound.stream.sampleRate;
+
+    if (sound.stream.buffer->looping ||
+        (sound.stream.buffer->frameReadPos <
+            sound.stream.buffer->loopStartPos) ||
+        (sound.stream.buffer->frameReadPos >
+                sound.stream.buffer->loopEndPos))
+    {
+        sound.stream.buffer->looping = false;
+        sound.stream.buffer->loopStartPos = 0;
+        sound.stream.buffer->loopEndPos =
+                       sound.stream.buffer->bufferSizeInFrames;
+    }
+}
+
+void SetSoundLoopStart(Sound sound, float pos)
+{
+    sound.stream.buffer->looping = true;
+    sound.stream.buffer->loopStartPos = pos * sound.stream.sampleRate;
+
+    if (sound.stream.buffer->loopStartPos >
+            sound.stream.buffer->loopEndPos)
+    {
+        sound.stream.buffer->loopEndPos =
+                sound.stream.buffer->bufferSizeInFrames;
+    }
+
+    SetSoundPos(sound, pos);
+}
+
+void SetSoundLoopEnd(Sound sound, float pos)
+{
+    sound.stream.buffer->looping = true;
+    sound.stream.buffer->loopEndPos = pos * sound.stream.sampleRate;
+
+    if (sound.stream.buffer->loopEndPos <
+            sound.stream.buffer->loopStartPos)
+    {
+        sound.stream.buffer->loopStartPos = 0;
+    }
+}
+
+void SoundLoopStartDelta(Sound sound, int delta)
+{
+    SetSoundLoopStart(sound,
+                    (sound.stream.buffer->loopStartPos /
+                            sound.stream.sampleRate) + delta);
+}
+
+void SoundLoopEndDelta(Sound sound, int delta)
+{
+    SetSoundLoopEnd(sound,
+                    (sound.stream.buffer->loopEndPos /
+                            sound.stream.sampleRate) + delta);
+}
+
+int SoundReadChunk(Sound sound, int numSamples, float* buf)
+{
+    int i,j;
+    unsigned char *inputBuf = sound.stream.buffer->origBuffer;
+    int channels = sound.stream.channels;
+
+//    TraceLog(LOG_INFO,"%p %u %u %u",
+//             inputBuf,
+//             sound.stream.buffer->bufferSizeInFrames,
+//             channels, sound.stream.sampleSize);
+
+    inputBuf += sound.stream.buffer->frameReadPos *
+                (sound.stream.sampleSize / 8);
+
+//    TraceLog(LOG_INFO,"%p ",inputBuf);
+
+    for (i = 0 ; i < (numSamples / channels) ; i++)
+    {
+        for (j = 0 ; j < channels ; j++)
+        {
+            if (sound.stream.sampleSize == 8)
+            {
+                buf[channels*i + j] =
+                    (float)(((unsigned char *)inputBuf)
+                            [channels*i + j] - 127)/256.0f;
+            }
+            else if (sound.stream.sampleSize == 16)
+            {
+                buf[channels*i + j] =
+                    (float)((short *)inputBuf)
+                        [channels*i + j]/32767.0f;
+            }
+            else if (sound.stream.sampleSize == 32)
+            {
+                buf[channels*i + j] =
+                    ((float *)inputBuf)
+                        [channels*i + j];
+            }
+
+            sound.stream.buffer->frameReadPos++;
+        }
+
+        if (sound.stream.buffer->frameReadPos >=
+                (sound.stream.buffer->origBufferSizeInFrames * channels))
+            break;
+    }
+
+//    TraceLog(LOG_INFO,"return %u",i*j);
+
+    return i*j;
 }
 
 // Convert wave data to desired format
@@ -1206,9 +1420,9 @@ void PlayMusicStream(Music music)
         // This is a hack for this section of code in UpdateMusicStream()
         // NOTE: In case window is minimized, music stream is stopped, just make sure to
         // play again on window restore: if (IsMusicPlaying(music)) PlayMusicStream(music);
-        ma_uint32 frameCursorPos = music.stream.buffer->frameCursorPos;
+        ma_uint32 frameReadPos = music.stream.buffer->frameReadPos;
         PlayAudioStream(music.stream);  // WARNING: This resets the cursor position.
-        music.stream.buffer->frameCursorPos = frameCursorPos;
+        music.stream.buffer->frameReadPos = frameReadPos;
     }
 }
 
@@ -1266,7 +1480,8 @@ void UpdateMusicStream(Music music)
 
     // TODO: Get the sampleLeft using totalFramesProcessed... but first, get total frames processed correctly...
     //ma_uint32 frameSizeInBytes = ma_get_bytes_per_sample(music.stream.buffer->dsp.formatConverterIn.config.formatIn)*music.stream.buffer->dsp.formatConverterIn.config.channels;
-    int sampleLeft = music.sampleCount - (music.stream.buffer->totalFramesProcessed*music.stream.channels);
+    int sampleLeft = music.sampleCount -
+            (music.stream.buffer->totalFramesProcessed*music.stream.channels);
 
     while (IsAudioStreamProcessed(music.stream))
     {
@@ -1460,7 +1675,7 @@ void UpdateAudioStream(AudioStream stream, const void *data, int samplesCount)
                 // Both buffers are available for updating.
                 // Update the first one and make sure the cursor is moved back to the front.
                 subBufferToUpdate = 0;
-                stream.buffer->frameCursorPos = 0;
+                stream.buffer->frameReadPos = 0;
             }
             else
             {
@@ -1571,7 +1786,7 @@ static void OnLog(ma_context *pContext, ma_device *pDevice, ma_uint32 logLevel, 
 static ma_uint32 ReadAudioBufferFramesInInternalFormat(AudioBuffer *audioBuffer, void *framesOut, ma_uint32 frameCount)
 {
     ma_uint32 subBufferSizeInFrames = (audioBuffer->sizeInFrames > 1)? audioBuffer->sizeInFrames/2 : audioBuffer->sizeInFrames;
-    ma_uint32 currentSubBufferIndex = audioBuffer->frameCursorPos/subBufferSizeInFrames;
+    ma_uint32 currentSubBufferIndex = audioBuffer->frameReadPos/subBufferSizeInFrames;
 
     if (currentSubBufferIndex > 1) return 0;
 
@@ -1606,19 +1821,21 @@ static ma_uint32 ReadAudioBufferFramesInInternalFormat(AudioBuffer *audioBuffer,
         ma_uint32 framesRemainingInOutputBuffer;
         if (audioBuffer->usage == AUDIO_BUFFER_USAGE_STATIC)
         {
-            framesRemainingInOutputBuffer = audioBuffer->sizeInFrames - audioBuffer->frameCursorPos;
+            framesRemainingInOutputBuffer =
+                    audioBuffer->loopEndPos -
+                    audioBuffer->frameReadPos;
         }
         else
         {
             ma_uint32 firstFrameIndexOfThisSubBuffer = subBufferSizeInFrames*currentSubBufferIndex;
-            framesRemainingInOutputBuffer = subBufferSizeInFrames - (audioBuffer->frameCursorPos - firstFrameIndexOfThisSubBuffer);
+            framesRemainingInOutputBuffer = subBufferSizeInFrames - (audioBuffer->frameReadPos - firstFrameIndexOfThisSubBuffer);
         }
 
         ma_uint32 framesToRead = totalFramesRemaining;
         if (framesToRead > framesRemainingInOutputBuffer) framesToRead = framesRemainingInOutputBuffer;
 
-        memcpy((unsigned char *)framesOut + (framesRead*frameSizeInBytes), audioBuffer->data + (audioBuffer->frameCursorPos*frameSizeInBytes), framesToRead*frameSizeInBytes);
-        audioBuffer->frameCursorPos = (audioBuffer->frameCursorPos + framesToRead)%audioBuffer->sizeInFrames;
+        memcpy((unsigned char *)framesOut + (framesRead*frameSizeInBytes), audioBuffer->data + (audioBuffer->frameReadPos*frameSizeInBytes), framesToRead*frameSizeInBytes);
+        audioBuffer->frameReadPos = (audioBuffer->frameReadPos + framesToRead)%audioBuffer->sizeInFrames;
         framesRead += framesToRead;
 
         // If we've read to the end of the buffer, mark it as processed
@@ -1766,7 +1983,7 @@ static void OnSendAudioDataToDevice(ma_device *pDevice, void *pFramesOut, const 
                         {
                             // Should never get here, but just for safety,
                             // move the cursor position back to the start and continue the loop
-                            audioBuffer->frameCursorPos = 0;
+                            audioBuffer->frameReadPos = 0;
                             continue;
                         }
                     }
@@ -1885,22 +2102,32 @@ static Wave LoadWAV(const char *fileName)
             fread(&wavFormat, sizeof(WAVFormat), 1, wavFile);
 
             // Check for fmt tag
-            if ((wavFormat.subChunkID[0] != 'f') || (wavFormat.subChunkID[1] != 'm') ||
-                (wavFormat.subChunkID[2] != 't') || (wavFormat.subChunkID[3] != ' '))
+            if ((wavFormat.subChunkID[0] != 'f') ||
+                (wavFormat.subChunkID[1] != 'm') ||
+                (wavFormat.subChunkID[2] != 't') ||
+                (wavFormat.subChunkID[3] != ' '))
             {
                 TRACELOG(LOG_WARNING, "WAVE: [%s] Wave format header is not valid", fileName);
             }
             else
             {
                 // Check for extra parameters;
-                if (wavFormat.subChunkSize > 16) fseek(wavFile, sizeof(short), SEEK_CUR);
+                if (wavFormat.subChunkSize > 16)
+                    fseek(wavFile, sizeof(short), SEEK_CUR);
 
                 // Read in the the last byte of data before the sound file
                 fread(&wavData, sizeof(WAVData), 1, wavFile);
+                while (strncmp(wavData.subChunkID, "data", 4))
+                {
+                    fseek(wavFile, wavData.subChunkSize, SEEK_CUR);
+                    fread(&wavData, sizeof(WAVData), 1, wavFile);
+                }
 
                 // Check for data tag
-                if ((wavData.subChunkID[0] != 'd') || (wavData.subChunkID[1] != 'a') ||
-                    (wavData.subChunkID[2] != 't') || (wavData.subChunkID[3] != 'a'))
+                if ((wavData.subChunkID[0] != 'd') ||
+                    (wavData.subChunkID[1] != 'a') ||
+                    (wavData.subChunkID[2] != 't') ||
+                    (wavData.subChunkID[3] != 'a'))
                 {
                     TRACELOG(LOG_WARNING, "WAVE: [%s] Data header is not valid", fileName);
                 }
@@ -1908,6 +2135,7 @@ static Wave LoadWAV(const char *fileName)
                 {
                     // Allocate memory for data
                     wave.data = RL_MALLOC(wavData.subChunkSize);
+                    TraceLog(LOG_INFO,"[%] WAV %u bytes data allocated",wavData.subChunkSize);
 
                     // Read in the sound data into the soundData variable
                     fread(wave.data, wavData.subChunkSize, 1, wavFile);

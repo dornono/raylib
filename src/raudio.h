@@ -143,6 +143,7 @@ Sound LoadSoundFromWave(Wave wave);                             // Load sound fr
 void UpdateSound(Sound sound, const void *data, int samplesCount);// Update sound buffer with new data
 void UnloadWave(Wave wave);                                     // Unload wave data
 void UnloadSound(Sound sound);                                  // Unload sound
+void ReplaceSound(Sound *sound, const void *data, int samplesCount);
 void ExportWave(Wave wave, const char *fileName);               // Export wave data to file
 void ExportWaveAsCode(Wave wave, const char *fileName);         // Export wave sample data to code (.h)
 
@@ -161,6 +162,15 @@ void WaveFormat(Wave *wave, int sampleRate, int sampleSize, int channels);  // C
 Wave WaveCopy(Wave wave);                                       // Copy a wave to a new wave
 void WaveCrop(Wave *wave, int initSample, int finalSample);     // Crop a wave to defined samples range
 float *GetWaveData(Wave wave);                                  // Get samples data from wave as a floats array
+float GetSoundTimeLength(Sound sound);                          // Get music time length (in seconds)
+float GetSoundTimePlayed(Sound sound);                          // Get current music time played (in seconds)
+float GetSoundStartPos(Sound sound);
+void SetSoundPos(Sound sound, float pos);
+void SetSoundLoopStart(Sound sound, float pos);
+void SetSoundLoopEnd(Sound sound, float pos);
+void SoundLoopStartDelta(Sound sound, int delta);
+void SoundLoopEndDelta(Sound sound, int delta);
+int SoundReadChunk(Sound sound, int numSamples, float* buf);
 
 // Music management functions
 Music LoadMusicStream(const char *fileName);                    // Load music stream from file
