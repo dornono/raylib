@@ -278,12 +278,17 @@ struct rAudioBuffer {
     int usage;                      // Audio buffer usage mode: STATIC or STREAM
 
     bool isSubBufferProcessed[2];   // SubBuffer processed (virtual double buffer)
-    unsigned int sizeInFrames;      // Total buffer size in frames
     unsigned int frameReadPos;    // Frame cursor position
     unsigned int totalFramesProcessed;  // Total frames processed in this buffer (required for play timing)
+    unsigned int loopStartPos;
+    unsigned int loopEndPos;
 
     unsigned char *data;            // Data buffer, on music stream keeps filling
-
+    unsigned int sizeInFrames;      // Total buffer size in frames
+      
+    unsigned char *origBuffer;
+    unsigned int   origBufferSizeInFrames;
+  
     rAudioBuffer *next;             // Next audio buffer on the list
     rAudioBuffer *prev;             // Previous audio buffer on the list
 };
@@ -514,14 +519,14 @@ AudioBuffer *LoadAudioBuffer(ma_format format, ma_uint32 channels, ma_uint32 sam
         return NULL;
     }
 
-    audioBuffer->buffer = RL_CALLOC(sizeInFrames*channels*ma_get_bytes_per_sample(format), 1);
+    audioBuffer->data = RL_CALLOC(sizeInFrames*channels*ma_get_bytes_per_sample(format), 1);
 
-    audioBuffer->origBuffer = audioBuffer->buffer;
-    audioBuffer->origBufferSizeInFrames = bufferSizeInFrames;
+    audioBuffer->origBuffer = audioBuffer->data;
+    audioBuffer->origBufferSizeInFrames = sizeInFrames;
 
     TRACELOG(LOG_INFO,
              "InitAudioBuffer() : allocate %u bytes for audio buffer",
-             bufferSizeInFrames *
+             sizeInFrames *
                      channels *
                      ma_get_bytes_per_sample(format));
 
@@ -546,9 +551,9 @@ AudioBuffer *LoadAudioBuffer(ma_format format, ma_uint32 channels, ma_uint32 sam
     audioBuffer->looping = false;
     audioBuffer->usage = usage;
     audioBuffer->frameReadPos = 0;
-    audioBuffer->bufferSizeInFrames = bufferSizeInFrames;
+    audioBuffer->sizeInFrames = sizeInFrames;
     audioBuffer->loopStartPos = 0;
-    audioBuffer->loopEndPos = audioBuffer->bufferSizeInFrames;
+    audioBuffer->loopEndPos = audioBuffer->sizeInFrames;
 
     // Buffers should be marked as processed by default so that a call to
     // UpdateAudioStream() immediately after initialization works correctly
@@ -778,18 +783,18 @@ void UnloadSound(Sound sound)
     TRACELOG(LOG_INFO, "WAVE: Unloaded sound data from RAM");
 }
 
-void ReplaceSound(Sound *sound, const void *data, int samplesCount)
+void ReplaceSound(Sound *sound, void *data, int samplesCount)
 {
-    if (sound->stream.buffer->buffer &&
-        (sound->stream.buffer->buffer !=
+    if (sound->stream.buffer->data &&
+        (sound->stream.buffer->data !=
                 sound->stream.buffer->origBuffer))
     {
-        RL_FREE(sound->stream.buffer->buffer);
+        RL_FREE(sound->stream.buffer->data);
     }
 
     sound->sampleCount = samplesCount;
-    sound->stream.buffer->buffer = data;
-    sound->stream.buffer->bufferSizeInFrames =
+    sound->stream.buffer->data = data;
+    sound->stream.buffer->sizeInFrames =
             samplesCount / sound->stream.channels;
 }
 
@@ -1054,7 +1059,7 @@ void SetSoundPos(Sound sound, float pos)
         sound.stream.buffer->looping = false;
         sound.stream.buffer->loopStartPos = 0;
         sound.stream.buffer->loopEndPos =
-                       sound.stream.buffer->bufferSizeInFrames;
+                       sound.stream.buffer->sizeInFrames;
     }
 }
 
@@ -1067,7 +1072,7 @@ void SetSoundLoopStart(Sound sound, float pos)
             sound.stream.buffer->loopEndPos)
     {
         sound.stream.buffer->loopEndPos =
-                sound.stream.buffer->bufferSizeInFrames;
+                sound.stream.buffer->sizeInFrames;
     }
 
     SetSoundPos(sound, pos);

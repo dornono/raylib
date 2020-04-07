@@ -1405,7 +1405,7 @@ RLAPI Sound LoadSoundFromWave(Wave wave);                             // Load so
 RLAPI void UpdateSound(Sound sound, const void *data, int samplesCount);// Update sound buffer with new data
 RLAPI void UnloadWave(Wave wave);                                     // Unload wave data
 RLAPI void UnloadSound(Sound sound);
-RLAPI void ReplaceSound(Sound *sound, const void *data, int samplesCount);
+RLAPI void ReplaceSound(Sound *sound,  void *data, int samplesCount);
 RLAPI void ExportWave(Wave wave, const char *fileName);               // Export wave data to file
 RLAPI void ExportWaveAsCode(Wave wave, const char *fileName);         // Export wave sample data to code (.h)
 
