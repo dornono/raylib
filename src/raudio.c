@@ -1050,8 +1050,7 @@ void SetSoundPos(Sound sound, float pos)
     sound.stream.buffer->frameReadPos =
             pos * sound.stream.sampleRate;
 
-    if (sound.stream.buffer->looping ||
-        (sound.stream.buffer->frameReadPos <
+    if ((sound.stream.buffer->frameReadPos <
             sound.stream.buffer->loopStartPos) ||
         (sound.stream.buffer->frameReadPos >
                 sound.stream.buffer->loopEndPos))
@@ -1852,7 +1851,11 @@ static ma_uint32 ReadAudioBufferFramesInInternalFormat(AudioBuffer *audioBuffer,
             currentSubBufferIndex = (currentSubBufferIndex + 1)%2;
 
             // We need to break from this loop if we're not looping
-            if (!audioBuffer->looping)
+            if (audioBuffer->looping)
+            {
+            	audioBuffer->frameReadPos = audioBuffer->loopStartPos;
+            }
+            else
             {
                 StopAudioBuffer(audioBuffer);
                 break;
