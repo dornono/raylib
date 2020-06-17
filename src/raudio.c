@@ -525,10 +525,10 @@ AudioBuffer *LoadAudioBuffer(ma_format format, ma_uint32 channels, ma_uint32 sam
     audioBuffer->origBufferSizeInFrames = sizeInFrames;
 
     TRACELOG(LOG_INFO,
-             "InitAudioBuffer() : allocate %u bytes for audio buffer",
-             sizeInFrames *
-                     channels *
-                     ma_get_bytes_per_sample(format));
+             "InitAudioBuffer() : allocate %u bytes for audio buffer (%u "
+             "frames, %u chnls, %u bytes/sample",
+             sizeInFrames * channels * ma_get_bytes_per_sample(format),
+             sizeInFrames, channels, ma_get_bytes_per_sample(format));
 
     // Audio data runs through a format converter
     ma_data_converter_config converterConfig = ma_data_converter_config_init(format, AUDIO_DEVICE_FORMAT, channels, AUDIO_DEVICE_CHANNELS, sampleRate, AUDIO_DEVICE_SAMPLE_RATE);
@@ -783,19 +783,35 @@ void UnloadSound(Sound sound)
     TRACELOG(LOG_INFO, "WAVE: Unloaded sound data from RAM");
 }
 
-void ReplaceSound(Sound *sound, void *data, int samplesCount)
+void
+ReplaceSound(Sound *sound, void *data, int samplesCount)
 {
+    float loopStart = 0, loopEnd = 0;
+
+    if (sound->stream.buffer->looping)
+    {
+        loopStart =
+            sound->stream.buffer->loopStartPos / sound->stream.sampleRate;
+        loopEnd = sound->stream.buffer->loopEndPos / sound->stream.sampleRate;
+    }
+
+    StopAudioBuffer(sound->stream.buffer);
+
     if (sound->stream.buffer->data &&
-        (sound->stream.buffer->data !=
-                sound->stream.buffer->origBuffer))
+        (sound->stream.buffer->data != sound->stream.buffer->origBuffer))
     {
         RL_FREE(sound->stream.buffer->data);
     }
 
-    sound->sampleCount = samplesCount;
-    sound->stream.buffer->data = data;
-    sound->stream.buffer->sizeInFrames =
-            samplesCount / sound->stream.channels;
+    sound->sampleCount                 = samplesCount;
+    sound->stream.buffer->data         = data;
+    sound->stream.buffer->sizeInFrames = samplesCount / sound->stream.channels;
+
+    if (loopStart || loopEnd)
+    {
+        SetSoundLoopStart(*sound, loopStart);
+        SetSoundLoopEnd(*sound, loopEnd);
+    }
 }
 
 // Update sound buffer with new data
