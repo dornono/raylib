@@ -4988,24 +4988,68 @@ static void *EventThread(void *arg)
 
                 if (event.code == REL_WHEEL) CORE.Input.Mouse.currentWheelMove += event.value;
             }
-
+#define OLI_ROTATION_270
             // Absolute movement parsing
             if (event.type == EV_ABS)
             {
                 // Basic movement
                 if (event.code == ABS_X)
                 {
-                    CORE.Input.Mouse.position.x = (event.value - worker->absRange.x)*CORE.Window.screen.width/worker->absRange.width;   // Scale acording to absRange
+#ifdef OLI_ROTATION_270
+                  CORE.Input.Mouse.position.y =
+                      (event.value-200) *
+                      CORE.Window.screen.height /
+                      (3850-200); // Scale acording to absRange
+                  
+                  if (CORE.Input.Mouse.position.y > CORE.Window.screen.height)
+                    CORE.Input.Mouse.position.y = CORE.Window.screen.height;
 
-                    #if defined(SUPPORT_GESTURES_SYSTEM)
-                        touchAction = TOUCH_MOVE;
-                        gestureUpdate = true;
-                    #endif
+                  if (CORE.Input.Mouse.position.y < 0)
+                    CORE.Input.Mouse.position.y = 0;
+
+                    // printf("Y. %f %d  %u \n",
+                    //  CORE.Input.Mouse.position.y,
+                    //  event.value,
+                    //  CORE.Window.screen.height);
+#else
+                  CORE.Input.Mouse.position.x =
+                      (worker->absRange.width - event.value -
+                       worker->absRange.x) *
+                      CORE.Window.screen.width /
+                      worker->absRange.width; // Scale acording to absRange
+                                              // printf("X %f %d  %u \n",
+                                              //  CORE.Input.Mouse.position.x,
+                                              //  event.value,
+                                              //   CORE.Window.screen.width);
+#endif
+#if defined(SUPPORT_GESTURES_SYSTEM)
+                  touchAction = TOUCH_MOVE;
+                  gestureUpdate = true;
+#endif
                 }
 
                 if (event.code == ABS_Y)
                 {
+                    #ifdef OLI_ROTATION_270
+                    CORE.Input.Mouse.position.x = (3850 - event.value)*CORE.Window.screen.width/(3850-220); // Scale acording to absRange
+                    
+                    if (CORE.Input.Mouse.position.x > CORE.Window.screen.width)
+                    CORE.Input.Mouse.position.x = CORE.Window.screen.width;
+
+                    if (CORE.Input.Mouse.position.x < 0)
+                    CORE.Input.Mouse.position.x = 0;
+
+//                     printf("X. %f %d  %u \n",
+//  CORE.Input.Mouse.position.x, 
+//  event.value,
+//   CORE.Window.screen.width);
+  #else
                     CORE.Input.Mouse.position.y = (event.value - worker->absRange.y)*CORE.Window.screen.height/worker->absRange.height; // Scale acording to absRange
+printf("Y %f %d  %u \n",
+ CORE.Input.Mouse.position.x, 
+ event.value,
+  CORE.Window.screen.height);                   
+   #endif
 
                     #if defined(SUPPORT_GESTURES_SYSTEM)
                         touchAction = TOUCH_MOVE;
